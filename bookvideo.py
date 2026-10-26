@@ -22,7 +22,7 @@
      python bookvideo.py generate --book "活着" --book "百年孤独" --no-poll
      python bookvideo.py download --task-id <id> --out out.mp4
 
-API 契约（基于 tools/video_web/server.py，已核实）
+API 契约（基于 book 服务已核实的接口）
 --------------------------------------------------
 * 鉴权：业务 GET 走 session cookie；POST 业务接口用 form 字段 key。
   本脚本先 POST /api/login（form key=）拿到 bk_sid cookie，之后请求自动携带。

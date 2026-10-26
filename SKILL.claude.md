@@ -9,7 +9,7 @@ description: 用书名/方向/书单一键生成「书单视频」。当用户�
 `bookvideo.py` 提供（纯标准库 CLI，跨平台），本技能只负责**何时调用 + 如何调用**。
 
 ## 前置条件
-- 本机可访问脚本：`<项目根>/tools/agent_skill/bookvideo.py`（路径按实际替换）。
+- 本机可访问脚本：`bookvideo.py`（路径按实际替换）。
 - 已配置环境变量 `BOOKVIDEO_KEY`（密钥向管理员索取，等同于一个带额度的账号）。
 - 可选 `BOOKVIDEO_BASE_URL`（默认 `https://book.yufon.site`；联调本地用 `http://127.0.0.1:9999`）。
 
@@ -21,16 +21,16 @@ description: 用书名/方向/书单一键生成「书单视频」。当用户�
 ## 调用方式（用 Bash 执行）
 ```bash
 # 具体书名（全自动出片，默认轮询到完成）
-python "<项目根>/tools/agent_skill/bookvideo.py" generate --book "活着"
+python "bookvideo.py" generate --book "活着"
 
 # 方向（从书库自动挑一本）
-python "<项目根>/tools/agent_skill/bookvideo.py" generate --direction "认知成长"
+python "bookvideo.py" generate --direction "认知成长"
 
 # 书单批量
-python "<项目根>/tools/agent_skill/bookvideo.py" generate --book "活着" --book "百年孤独"
+python "bookvideo.py" generate --book "活着" --book "百年孤独"
 
 # 只入队、不等待（异步编排，返回 task_id）
-python "<项目根>/tools/agent_skill/bookvideo.py" generate --book "活着" --no-poll --json
+python "bookvideo.py" generate --book "活着" --no-poll --json
 ```
 
 ## 结果解析
@@ -40,7 +40,7 @@ python "<项目根>/tools/agent_skill/bookvideo.py" generate --book "活着" --n
 - 若用户只要「提交了就行」，用 `--no-poll` 拿 `task_id` 即返回，不要阻塞等待。
 - 若需把视频文件落到本地，再调：
   ```bash
-  python "<项目根>/tools/agent_skill/bookvideo.py" download --task-id <id> --out out.mp4
+  python "bookvideo.py" download --task-id <id> --out out.mp4
   ```
 
 ## 注意
