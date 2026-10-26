@@ -20,9 +20,9 @@
 ### 方式 A：从 GitHub 克隆（推荐，拿最新）
 
 ```bash
-git clone https://github.com/zzall/book-video.git
-# skill 在仓库的 bookvideo-skill/ 目录下
-cd book-video/bookvideo-skill
+git clone https://github.com/zzall/bookvideo-skill.git
+# 仓库本身就是 skill，克隆后进入目录即可
+cd bookvideo-skill
 ```
 
 ### 方式 B：只要单文件
@@ -30,7 +30,7 @@ cd book-video/bookvideo-skill
 直接把 `bookvideo.py` 拷贝到任意位置即可（它零依赖，不依赖本仓库其他文件）：
 
 ```bash
-curl -O https://raw.githubusercontent.com/zzall/book-video/main/bookvideo-skill/bookvideo.py
+curl -O https://raw.githubusercontent.com/zzall/bookvideo-skill/main/bookvideo.py
 # 或浏览器打开上面的 URL 另存为
 ```
 
