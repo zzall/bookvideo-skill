@@ -187,10 +187,18 @@ class Client:
         raise BookVideoError("轮询超时（%ss）仍未出片" % int(total_timeout))
 
     def download(self, task_id: str, out_path: str) -> str:
-        """把成片下载到本地文件，返回本地路径。CookieJar 按域过滤，302 到对象存储不会泄漏会话。"""
+        """把成片下载到本地文件，返回本地路径。
+
+        注意：下载接口需要登录会话（与业务 GET 一致），必须带上登录拿到的
+        bk_sid cookie，否则线上服务会返回 401。302 重定向到对象存储时不泄漏
+        会话（cookie 按域/主机过滤）。
+        """
         url = (self.base + "/api/download?task_id="
                + urllib.parse.quote(task_id, safe="") + "&step=video")
-        req = Request(url, headers={"User-Agent": APP})
+        headers = {"User-Agent": APP}
+        if self._sid:
+            headers["Cookie"] = "bk_sid=" + self._sid
+        req = Request(url, headers=headers, method="GET")
         try:
             with self.opener.open(req, timeout=self.timeout) as r:
                 data = r.read()
@@ -211,11 +219,12 @@ def _video_download_url(client: "Client", task_id: str, video: str) -> str:
 
 
 def _run_generate(args) -> int:
-    key = args.key or os.environ.get("BOOKVIDEO_KEY")
+    key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
     if not key:
         print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
         return 2
-    client = Client(args.base_url or os.environ.get("BOOKVIDEO_BASE_URL")
+    client = Client(getattr(args, "base_url", None)
+                    or os.environ.get("BOOKVIDEO_BASE_URL")
                     or DEFAULT_BASE, key, timeout=args.http_timeout)
     try:
         client.login()
@@ -271,18 +280,19 @@ def _run_generate(args) -> int:
             print("  [完成] 成片：%s" % entry["download_url"])
         results.append(entry)
 
-    if args.json:
+    if getattr(args, "json", False):
         print(json.dumps({"results": results}, ensure_ascii=False, indent=2))
     ok_n = sum(1 for r in results if r.get("ok"))
     return 0 if ok_n == len(results) and results else (0 if results else 2)
 
 
 def _run_download(args) -> int:
-    key = args.key or os.environ.get("BOOKVIDEO_KEY")
+    key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
     if not key:
         print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
         return 2
-    client = Client(args.base_url or os.environ.get("BOOKVIDEO_BASE_URL")
+    client = Client(getattr(args, "base_url", None)
+                    or os.environ.get("BOOKVIDEO_BASE_URL")
                     or DEFAULT_BASE, key, timeout=args.http_timeout)
     try:
         client.login()
@@ -291,7 +301,7 @@ def _run_download(args) -> int:
         print("[错误] %s" % e, file=sys.stderr)
         return 4
     print("已保存到：%s" % out)
-    if args.json:
+    if getattr(args, "json", False):
         print(json.dumps({"ok": True, "file": out}, ensure_ascii=False))
     return 0
 
@@ -321,11 +331,23 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="只入队返回 task_id，不轮询等待出片")
     g.add_argument("--poll-timeout", type=float, default=1800.0,
                    help="轮询总超时(秒)，默认 1800")
+    g.add_argument("--key", default=argparse.SUPPRESS,
+                   help="访问密钥，或环境变量 BOOKVIDEO_KEY（可放子命令后）")
+    g.add_argument("--base-url", default=argparse.SUPPRESS,
+                   help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
+    g.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出结构化 JSON（可放子命令后）")
     g.set_defaults(func=_run_generate)
 
     d = sub.add_parser("download", help="下载某任务的成片到本地")
     d.add_argument("--task-id", required=True)
     d.add_argument("--out", required=True, help="本地保存路径（.mp4）")
+    d.add_argument("--key", default=argparse.SUPPRESS,
+                   help="访问密钥，或环境变量 BOOKVIDEO_KEY（可放子命令后）")
+    d.add_argument("--base-url", default=argparse.SUPPRESS,
+                   help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
+    d.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出结构化 JSON（可放子命令后）")
     d.set_defaults(func=_run_download)
 
     sub.add_parser("selftest", help="内置 mock 服务端到端自测（无需真实服务）")
@@ -388,8 +410,12 @@ def _run_selftest() -> int:
                      "category": "小说"},
                 ]})
             elif self.path.startswith("/api/download"):
-                self._send(200, body_bytes=b"\x00\x00\x00\x18ftypmp42"
-                           b"mock-video-bytes", content_type="video/mp4")
+                cookie = self.headers.get("Cookie") or ""
+                if "bk_sid=" not in cookie:
+                    self._send(401, {"ok": False, "error": "no session"})
+                else:
+                    self._send(200, body_bytes=b"\x00\x00\x00\x18ftypmp42"
+                               b"mock-video-bytes", content_type="video/mp4")
             else:
                 self._send(404, {"ok": False, "error": "not found"})
 
@@ -409,6 +435,14 @@ def _run_selftest() -> int:
             fails += 1
 
     try:
+        # 未登录时下载应返回 401（校验会话 cookie 已生效）
+        import tempfile as _tf
+        noauth = Client(base, "testkey", timeout=5.0)
+        try:
+            noauth.download("t1", os.path.join(_tf.gettempdir(), "bv_noauth.mp4"))
+            check("download 未登录应报错", False)
+        except ApiError:
+            check("download 未登录应报错", True)
         c.login()
         check("login 建立会话(cookie)", True)
         g = c.generate("活着")
