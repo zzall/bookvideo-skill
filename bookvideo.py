@@ -296,6 +296,27 @@ def buy_url(base: str, plan: str = "month") -> str:
     return "%s/?buy=%s" % ((base or DEFAULT_BASE).rstrip("/"), plan)
 
 
+def _no_key_hint() -> None:
+    """没配 Key 时的唯一出口：必须自带解法（去哪拿、怎么配、配完怎么跑）。
+
+    这是「刚下载、第一次跑」最常撞到的一步。旧文案只写「用 --key 或环境变量」，
+    既没提脚本其实支持 .env，也没给申请地址——用户看到只会去翻文档，或者干脆放弃。
+    """
+    base = (os.environ.get("BOOKVIDEO_BASE_URL") or DEFAULT_BASE).rstrip("/")
+    lines = [
+        "[需要配置密钥] 没找到 BOOKVIDEO_KEY —— 它决定你能生成多少条（免费档每天 3 条，失败不计数）。",
+        "",
+        "  ① 免费自助申请（无需付费）：%s/skill" % base,
+        "  ② 拿到后配好，三种方式任选其一：",
+        "     · 写 .env（推荐）：项目根目录建 .env，内容一行  BOOKVIDEO_KEY=bk_xxxx",
+        "     · 环境变量：export BOOKVIDEO_KEY=bk_xxxx",
+        '     · 临时指定：python bookvideo.py generate --book "活着" --key bk_xxxx',
+        "",
+        "  如果你在用 Agent：把 Key 发给它，说「我的 Key 是 xxx，帮我配好 bookvideo」，它会替你写进 .env。",
+    ]
+    print("\n".join(lines), file=sys.stderr)
+
+
 def _remain_days(until: str):
     """距到期日还剩多少天（按日历日近似），用于把「不限次」说成「剩 N 天不限次」。"""
     try:
@@ -340,7 +361,7 @@ def _video_download_url(client: "Client", task_id: str, video: str) -> str:
 def _run_generate(args) -> int:
     key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
     if not key:
-        print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
+        _no_key_hint()
         return 2
     client = Client(getattr(args, "base_url", None)
                     or os.environ.get("BOOKVIDEO_BASE_URL")
@@ -424,7 +445,7 @@ def _run_generate(args) -> int:
 def _run_download(args) -> int:
     key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
     if not key:
-        print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
+        _no_key_hint()
         return 2
     client = Client(getattr(args, "base_url", None)
                     or os.environ.get("BOOKVIDEO_BASE_URL")
@@ -505,7 +526,7 @@ def _run_quota(args) -> int:
     """
     key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
     if not key:
-        print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
+        _no_key_hint()
         return 2
     client = Client(getattr(args, "base_url", None)
                     or os.environ.get("BOOKVIDEO_BASE_URL")
