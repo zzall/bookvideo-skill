@@ -25,12 +25,12 @@
 API 契约（基于 book 服务已核实的接口）
 --------------------------------------------------
 * 鉴权：业务 GET 走 session cookie；POST 业务接口用 form 字段 key。
-  本脚本先 POST /api/login（form key=）拿到 bk_sid cookie，之后请求自动携带。
-* 生成：POST /api/generate（form: key, book, src_mode=new_auto）。
+  本脚本先 POST /api/login（JSON body: {"key": ...}）拿到 bk_sid cookie，之后请求自动携带。
+* 生成：POST /api/generate（form: book, src_mode=new_auto；key 已由会话携带）。
   服务端 _auto_ensure_book 会在书名不在库时自动抓取，返回 {ok, task_id, queue_position}。
 * 轮询：GET /api/status?task_id= 返回 state（含 status / video / error / log）。
 * 书库：GET /api/books 返回 {books:[{book_name, author, category, ...}]}（方向选书用）。
-* 下载：GET /api/download?task_id=&step=video（单文件 302 到对象存储或直传）。
+* 下载：GET /api/download?task_id=&step=video → 302 到对象存储上的成片直链（需登录会话）。
 """
 from __future__ import annotations
 

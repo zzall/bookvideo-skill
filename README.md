@@ -20,8 +20,10 @@
 ### 方式 A：从 GitHub 克隆（推荐，拿最新）
 
 ```bash
-git clone https://github.com/zzall/bookvideo-skill.git
-# 仓库本身就是 skill，克隆后进入目录即可
+# 中国大陆网络直连 GitHub HTTPS 常被重置（实测 Recv failure: Connection was reset），
+# 有 SSH key 就优先用 SSH 地址：
+git clone git@github.com:zzall/bookvideo-skill.git
+# 没有 SSH key：网页打开仓库 → Code → Download ZIP，解压即用（效果等价）
 cd bookvideo-skill
 ```
 
@@ -225,7 +227,7 @@ ffmpeg -i 活着.mp4 -i cover.jpg -map 0:v -map 0:a -map 1:v -disposition:v:1 at
 
 ```bash
 python bookvideo.py selftest
-# 期望：5 项 PASS，结尾 SELFTEST ALL_PASS
+# 期望：6 项 PASS，结尾 SELFTEST ALL_PASS
 ```
 内置一个 mock HTTP 服务，验证 登录 / 生成 / 轮询 / 方向选书 / 下载 全链路逻辑。
 
