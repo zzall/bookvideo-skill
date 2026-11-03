@@ -48,15 +48,25 @@ curl -O https://raw.githubusercontent.com/zzall/bookvideo-skill/main/bookvideo.p
 
 ### 3.1 密钥 `BOOKVIDEO_KEY`
 
-向服务管理员索取（或自助申请入口，若已开放）。**密钥即额度账号，等同于可消耗生成次数**，务必保管。
+向服务管理员索取（或到 <https://book.yufon.site/skill> 自助申请）。**密钥即额度账号，等同于可消耗生成次数**，务必保管。
+
+三种配置方式任选（优先级从高到低）：
 
 ```bash
-# 推荐：用环境变量（不要写进脚本 / 仓库）
+# ① 写进文件（推荐，配一次长期有效）
+#    新建 .env 放在：项目根目录 / bookvideo.py 同目录 / ~/.bookvideo/env 任一处，内容一行：
+BOOKVIDEO_KEY=bk_xxxxxxxx
+
+# ② 环境变量
 export BOOKVIDEO_KEY="你的密钥"
 
-# 或在命令里临时给（不推荐长期用）
+# ③ 命令行临时给（不推荐长期用）
 python bookvideo.py generate --book "活着" --key "你的密钥"
 ```
+
+脚本启动时会自动读取上述 `.env`（只认 `BOOKVIDEO_*` 开头的行，已存在的环境变量优先）。
+
+**如果你在用 agent**：不用自己配，把 Key 发给它并说「我的 Key 是 xxx，帮我配好 bookvideo」，它会替你写进 `.env`。
 
 ### 3.2 服务地址 `BOOKVIDEO_BASE_URL`
 
@@ -140,6 +150,20 @@ python bookvideo.py generate --book "活着" --duration 60     # 约 60 秒成�
 python bookvideo.py generate --book "活着" --await-script     # 生成文案后暂停，等人工确认再继续
 ```
 
+### 4.8 查看额度 / 套餐 / 到期
+
+批量前先确认今天还剩几次，或订阅是否快到期：
+
+```bash
+python bookvideo.py quota
+# 账号：test
+# 今日额度：1 / 3（失败 / 中断不计数）
+# 套餐：包月（到 2026-12-03 · 剩 30 天不限次）
+# 订阅 / 续费（登录后付款立刻生效）：https://book.yufon.site/?buy=month
+```
+
+额度用完 / 权益到期时，`generate` 不会再「假失败」，而是明确返回 **exit 5** 并打印上面的购买入口，把链接交给用户即可。
+
 ---
 
 ## 5. 骚操作（高级玩法）
@@ -210,14 +234,16 @@ ffmpeg -i 活着.mp4 -i cover.jpg -map 0:v -map 0:a -map 1:v -disposition:v:1 at
 | 0 | 全部成功 |
 | 2 | 参数错误 / 未提供书或密钥 |
 | 3 | 鉴权失败（密钥无效） |
-| 4 | 业务失败（额度耗尽 / 任务失败 / 下载失败） |
+| 4 | 业务失败（任务失败 / 下载失败） |
+| 5 | **额度或权益不足**（免费额度用完 / 订阅到期回落免费档又用尽）。可购买解决，**不要重试**；终端已打印官方站点购买链接 |
 
 ---
 
 ## 8. 安全 & 合规
 
 - **密钥即权限**：`BOOKVIDEO_KEY` 等同于一个可消耗生成额度的账号，**勿提交进仓库 / 勿写进公开可读文件**；用环境变量或 secret 注入。
-- **额度**：每个密钥有每日成功生成上限（默认 3，VIP 不限），批量前确认额度。
+- **额度**：免费档每个密钥有每日成功生成上限（默认 3，**失败 / 中断不计数**）；订阅（包月 / 包年 / 永久）后不限量。订阅到期当天回落免费档，免费档用尽时 `generate` 会返回 **exit 5（额度或权益不足）** 并在终端打印官方站点购买链接 `https://book.yufon.site/?buy=month`——**直接把这个链接给用户即可，不要当「生成失败」报告，也不要重试**。
+- 先查额度再批量：跑 `python bookvideo.py quota` 看「今日剩余 / 套餐 / 到期日」。
 - **渲染耗时**：分钟级异步；`--poll-timeout` 默认 1800s，按需调大。
 - **合规**：生成内容受视频号内容安全约束；开放给第三方前需服务端接入审核（非本脚本范围）。
 
@@ -242,5 +268,6 @@ python bookvideo.py generate --book A --book B         # 批量书单
 python bookvideo.py generate --book "书名" --no-poll   # 只入队拿 task_id
 python bookvideo.py generate --book "书名" --json      # 机器可读输出
 python bookvideo.py download --task-id <id> --out o.mp4 # 下载成片
+python bookvideo.py quota                              # 查今日额度/套餐/到期
 python bookvideo.py selftest                            # 自测
 ```

@@ -43,10 +43,49 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from urllib.request import Request, build_opener
 
 DEFAULT_BASE = "https://book.yufon.site"
 APP = "bookvideo-cli/1.0"
+
+
+def _load_local_env() -> None:
+    """把「文件里的 Key」读进环境变量，让用户不用敲 export 也能用。
+
+    为什么需要：文档一直说「配置环境变量」，但多数人（和 agent）更愿意把 Key 写进一个文件。
+    没有这一步，用户照做写了 .env，脚本只认 os.environ，就会一直报「缺少密钥」。
+    查找顺序（先找到先用）：$BOOKVIDEO_ENV_FILE → 当前目录 .env → ~/.bookvideo/env
+    规则：只认 BOOKVIDEO_* 开头的 KEY=VALUE，忽略空行与 # 注释；
+         真实环境变量优先（setdefault），文件只做兜底，绝不覆盖已有的值。
+    """
+    cands = []
+    custom = os.environ.get("BOOKVIDEO_ENV_FILE")
+    if custom:
+        cands.append(Path(custom).expanduser())
+    cands.append(Path.cwd() / ".env")                                   # 在项目根运行：读项目根 .env
+    try:
+        cands.append(Path(__file__).resolve().parent / ".env")          # 在别处运行：读脚本同目录 .env
+    except Exception:  # noqa: BLE001
+        pass
+    cands.append(Path.home() / ".bookvideo" / "env")                    # 全局配置（所有项目通用）
+    for f in cands:
+        try:
+            if not f.is_file():
+                continue
+            for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                name, val = s.split("=", 1)
+                name = name.strip()
+                if name.startswith("export "):
+                    name = name[7:].strip()
+                if not name.startswith("BOOKVIDEO_"):
+                    continue
+                os.environ.setdefault(name, val.strip().strip('"').strip("'"))
+        except Exception:  # noqa: BLE001  文件读不了就跳过，不能因此让命令失败
+            continue
 
 
 class BookVideoError(Exception):
@@ -59,6 +98,14 @@ class AuthError(BookVideoError):
 
 class ApiError(BookVideoError):
     """业务接口返回失败。"""
+
+
+class QuotaError(ApiError):
+    """额度/权益不足：今日免费次数用完，或订阅到期后回落免费档又用尽。
+
+    与普通业务失败分开，因为它的解法不是「重试」，而是「去官网登录、订阅/续费」。
+    上层必须把它渲染成可点击的购买入口，而不是一句干巴巴的报错。
+    """
 
 
 def _read_body(resp) -> str:
@@ -122,7 +169,9 @@ class Client:
         st, j = self._request("POST", "/api/login", json_body={"key": self.key})
         if st in (401, 403) or (isinstance(j, dict)
                                 and j.get("authenticated") is False):
-            raise AuthError("登录失败：密钥无效或无权限（HTTP %s）" % st)
+            raise AuthError(
+                "登录失败：密钥无效或无权限（HTTP %s）。可到官网 %s 登录后查看 / 重置密钥"
+                % (st, self.base))
         if st >= 400:
             raise ApiError("登录接口异常 HTTP %s：%s" % (st, j))
         return j
@@ -135,9 +184,13 @@ class Client:
         if duration is not None:
             form["duration"] = str(duration)
         st, j = self._request("POST", "/api/generate", form=form)
+        # 额度/权益不足：服务端用 200 + {ok:false, quota_blocked:true} 表达（也兼容 402），
+        # 必须单独抛 —— 这类失败的解法是「去官网订阅/续费」，不是重试。
+        if j.get("quota_blocked") or st == 402:
+            raise QuotaError(str(j.get("error") or "生成额度不足").strip())
         if st >= 400 or not j.get("ok"):
             raise ApiError("生成请求失败：%s" % (j.get("error") or "HTTP %s" % st))
-        return j  # {ok, book, task_id, queue_position, quota_blocked?}
+        return j  # {ok, book, task_id, queue_position}
 
     def status(self, task_id: str) -> dict:
         st, j = self._request("GET", "/api/status?task_id="
@@ -149,6 +202,25 @@ class Client:
         if st >= 400:
             raise ApiError("获取书库失败 HTTP %s：%s" % (st, j))
         return j.get("books") or []
+
+    def me(self) -> dict:
+        """当前账号信息：含今日额度 used/limit、套餐 plan、到期 paid_until、是否管理员。"""
+        st, j = self._request("GET", "/api/me")
+        if st in (401, 403) or not j.get("authenticated"):
+            raise AuthError(
+                "登录失败：密钥无效或无权限（HTTP %s）。可到官网 %s 登录后查看 / 重置密钥"
+                % (st, self.base))
+        return j
+
+    def plans(self) -> dict:
+        """公开套餐表（含价格）。纯展示用，取不到就返回空字典，绝不阻塞主流程。"""
+        try:
+            st, j = self._request("GET", "/api/plans")
+            if st < 400 and j.get("plans"):
+                return j
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
 
     def pick_by_direction(self, direction: str, count: int = 1) -> list:
         d = (direction or "").strip()
@@ -211,6 +283,53 @@ class Client:
         return out_path
 
 
+PLAN_CN = {"day": "按天", "month": "包月", "year": "包年", "life": "永久", "trial": "体验单"}
+
+
+def buy_url(base: str, plan: str = "month") -> str:
+    """官网「登录 + 订阅/续费」入口。
+
+    `?buy=<plan>` 是站点已有的深链：打开页面即弹套餐框并预选档位，用户用同一个 Key
+    登录后付款即可生效（金额由服务端 /api/orders 计算，URL 里改不动价格）。
+    默认预选包月——它是绝大多数人续费/尝鲜的第一选择，也最便宜到「先跑起来」。
+    """
+    return "%s/?buy=%s" % ((base or DEFAULT_BASE).rstrip("/"), plan)
+
+
+def _remain_days(until: str):
+    """距到期日还剩多少天（按日历日近似），用于把「不限次」说成「剩 N 天不限次」。"""
+    try:
+        end = time.mktime(time.strptime(until, "%Y-%m-%d")) + 86399
+        return max(0, int((end - time.time()) // 86400) + 1)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _quota_lines(client: "Client", reason: str) -> list:
+    """把「额度不足」渲染成可直接照做的多行提示：原因 + 价格 + 可点击入口。
+
+    终端里这条路必须是「一条链接点过去就能买」，而不是让用户猜官网在哪、买哪档。
+    """
+    out = ["[额度不足] %s" % (reason or "生成额度已用完"), ""]
+    p = client.plans() or {}
+    rows = []
+    for it in (p.get("plans") or []):
+        plan = str(it.get("plan") or "")
+        amt = it.get("amount")
+        if plan in ("day", "trial") or amt is None:      # 按天/体验单不占版面，包月起展示
+            continue
+        days = it.get("days")
+        dur = "永久" if not days else "%d 天" % int(days)
+        rows.append("  %-4s %.2f 元 · %s不限次" % (PLAN_CN.get(plan, plan), float(amt), dur))
+    if rows:
+        out.append("可选套餐（订阅后对应天数内不限次；失败/中断不计数）：")
+        out.extend(rows)
+        out.append("")
+    out.append("点这里登录并订阅/续费：%s" % buy_url(client.base))
+    out.append("（用同一个 BOOKVIDEO_KEY 登录，付款到账后额度立刻恢复，无需改配置）")
+    return out
+
+
 def _video_download_url(client: "Client", task_id: str, video: str) -> str:
     if str(video).startswith(("http://", "https://")):
         return video
@@ -248,10 +367,18 @@ def _run_generate(args) -> int:
         return 2
 
     results = []
+    quota_hit = False
     for book in books:
         try:
             g = client.generate(book, duration=args.duration,
                                 await_script=args.await_script)
+        except QuotaError as e:
+            # 额度/权益不足：后面的书必然同样被拒，直接停手，别刷一屏重复报错。
+            print("\n".join(_quota_lines(client, str(e))), file=sys.stderr)
+            results.append({"book": book, "ok": False, "quota_blocked": True,
+                            "error": str(e), "buy_url": buy_url(client.base)})
+            quota_hit = True
+            break
         except ApiError as e:
             print("[错误] 《%s》入队失败：%s" % (book, e), file=sys.stderr)
             results.append({"book": book, "ok": False, "error": str(e)})
@@ -281,9 +408,17 @@ def _run_generate(args) -> int:
         results.append(entry)
 
     if getattr(args, "json", False):
-        print(json.dumps({"results": results}, ensure_ascii=False, indent=2))
+        out = {"results": results}
+        if quota_hit:
+            out["quota_blocked"] = True
+            out["buy_url"] = buy_url(client.base)
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    if quota_hit:
+        return 5                                   # 额度/权益不足：可购买解决，非重试
+    if not results:
+        return 2
     ok_n = sum(1 for r in results if r.get("ok"))
-    return 0 if ok_n == len(results) and results else (0 if results else 2)
+    return 0 if ok_n == len(results) else 4        # 有任一失败就是业务失败，不再假成功
 
 
 def _run_download(args) -> int:
@@ -350,8 +485,81 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="输出结构化 JSON（可放子命令后）")
     d.set_defaults(func=_run_download)
 
+    q = sub.add_parser("quota", help="查看当前密钥的今日额度 / 套餐 / 到期时间")
+    q.add_argument("--key", default=argparse.SUPPRESS,
+                   help="访问密钥，或环境变量 BOOKVIDEO_KEY（可放子命令后）")
+    q.add_argument("--base-url", default=argparse.SUPPRESS,
+                   help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
+    q.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出结构化 JSON（可放子命令后）")
+    q.set_defaults(func=_run_quota)
+
     sub.add_parser("selftest", help="内置 mock 服务端到端自测（无需真实服务）")
     return p
+
+
+def _run_quota(args) -> int:
+    """查询额度：让 Agent 在入队前先看一眼「今天还能跑几次 / 套餐是否到期」，
+
+    也作为额度被拒后的「去哪买」入口——这里能直接给出官网购买链接。
+    """
+    key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
+    if not key:
+        print("[错误] 缺少密钥：用 --key 或环境变量 BOOKVIDEO_KEY", file=sys.stderr)
+        return 2
+    client = Client(getattr(args, "base_url", None)
+                    or os.environ.get("BOOKVIDEO_BASE_URL")
+                    or DEFAULT_BASE, key, timeout=args.http_timeout)
+    try:
+        client.login()
+        me = client.me()
+    except AuthError as e:
+        print("[错误] %s（可到 %s 登录查看 / 找回密钥）" % (e, client.base), file=sys.stderr)
+        return 3
+    q = me.get("quota") or {}
+    plan = q.get("plan") or "free"
+    paid = bool(q.get("paid")) or plan not in ("free", "trial")
+    adm = bool(me.get("is_admin"))
+    unlimited = bool(q.get("unlimited"))
+
+    if getattr(args, "json", False):
+        out = {
+            "ok": True,
+            "account": me.get("name") or "-",
+            "is_admin": adm,
+            "quota": q,
+            "buy_url": buy_url(client.base),
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
+    print("账号：%s%s" % (me.get("name") or "-", "（管理员）" if adm else ""))
+    remain = _remain_days(q.get("paid_until")) if q.get("paid_until") else None
+    if adm:
+        print("额度：管理员不受限")
+    elif unlimited:
+        if plan == "life" or remain is None:
+            print("额度：永久会员，不限次")
+        else:
+            print("额度：订阅期内不限次（剩 %d 天）" % remain)
+    else:
+        print("今日额度：%s / %s（失败 / 中断不计数）" % (q.get("used"), q.get("limit")))
+    if paid:
+        if plan == "life":
+            print("套餐：永久会员（不限次）")
+        elif q.get("paid_until"):
+            dur = ("剩 %d 天" % remain) if remain is not None else "订阅期内"
+            print("套餐：%s（到 %s · %s不限次）" % (PLAN_CN.get(plan, plan),
+                                                  q.get("paid_until"), dur))
+        else:
+            print("套餐：%s（不限次）" % PLAN_CN.get(plan, plan))
+    else:
+        print("套餐：未订阅（免费档，每日 %s 条）" % q.get("limit"))
+        if plan and plan not in ("free",):
+            print("      注意：%s 已于 %s 到期，已回落免费档" % (PLAN_CN.get(plan, plan), q.get("paid_until")))
+    print("")
+    print("订阅 / 续费（登录后付款立刻生效）：%s" % buy_url(client.base))
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -466,6 +674,7 @@ def _run_selftest() -> int:
 
 
 def main(argv=None) -> int:
+    _load_local_env()          # 先把 .env / ~/.bookvideo/env 里的 Key 读进来（环境变量优先）
     args = _build_parser().parse_args(argv)
     if getattr(args, "cmd", None) == "selftest":
         return _run_selftest()
