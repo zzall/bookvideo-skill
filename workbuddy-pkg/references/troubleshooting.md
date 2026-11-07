@@ -2,13 +2,19 @@
 
 ## 缺密钥（exit 2）
 
-终端会打印「需要配置密钥」并给出两种领取方式。处置：
+终端会打印「需要配置密钥」并给出申请页地址。处置：
 
 ```bash
-python scripts/bookvideo.py apply --email 用户邮箱
+python scripts/bookvideo.py apply        # 只打印申请页地址，不会替你申领
 ```
 
-成功后自动写入 `~/.bookvideo/env`。**不要虚构 Key，也不要跳过这一步直接报生成失败。**
+把地址交给用户，让他在浏览器里领（填邮箱 + 完成页面校验），拿到 Key 后再保存：
+
+```bash
+python scripts/bookvideo.py key --set 用户的Key
+```
+
+**不要虚构 Key，不要代用户申领，也不要跳过这一步直接报生成失败。**
 
 ## 鉴权失败（exit 3）
 

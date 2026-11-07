@@ -28,7 +28,7 @@ examples_en: ["Generate a book video for To Live", "Make several cognition-growt
 ## 前置条件
 
 - Python 3.8+，Windows / macOS / Linux 通用，纯标准库、零第三方依赖
-- 首次使用需要一个免费密钥：**一条命令自助申领**，免费档每天 3 条（失败不计数），不需要联系任何人
+- 首次使用需要一个免费密钥：**打开申请页自助领取**（`bookvideo.py apply` 会给你地址），免费档每天 3 条（失败不计数），不需要联系任何人
 - 可访问 `https://book.yufon.site`
 
 脚本位于本技能包 `scripts/bookvideo.py`，命令一律从技能包根目录执行。
@@ -38,12 +38,18 @@ examples_en: ["Generate a book video for To Live", "Make several cognition-growt
 ### 第 1 步：确保有密钥（只做一次）
 
 ```bash
-python scripts/bookvideo.py apply --email 用户邮箱
+python scripts/bookvideo.py apply
 ```
 
-成功会打印密钥与每日额度，并写入 `~/.bookvideo/env` 的 `BOOKVIDEO_KEY=`，后续命令自动读取，用户不用配环境变量。已有密钥时也可用 `--key`、环境变量或 `.env` 文件（项目根目录 / 脚本同目录 / `~/.bookvideo/env` 任一），优先级：`--key` > 环境变量 > `.env`。
+这条命令**不会替你申领**，只打印官方申请页地址（`https://book.yufon.site/skill`）。把链接给用户，让他在浏览器里填邮箱、完成页面上的校验后领取。申领必须由本人完成：服务端按邮箱、设备、网络三重限频，脚本代领等于绕开风控。
 
-邮箱须真实可收信：服务端按邮箱 / 设备 / IP 判重限频，同一邮箱只发一次免费额度。
+领到 Key 后，让用户自己保存（或他把 Key 交给你，由你代写）：
+
+```bash
+python scripts/bookvideo.py key --set 用户的Key
+```
+
+保存后写入 `~/.bookvideo/env`，后续命令自动读取。已有密钥时也可用 `--key`、环境变量或 `.env` 文件（项目根目录 / 脚本同目录 / `~/.bookvideo/env` 任一），优先级：`--key` > 环境变量 > `.env`。
 
 ### 第 2 步：生成
 
@@ -86,6 +92,7 @@ python scripts/bookvideo.py quota
 
 ## 注意事项
 
+- **不要替用户申领**：`apply` 只给申请页地址，真正的领取必须由用户本人在网页完成（邮箱校验 + 设备 + 网络三重限频都在服务端，代领就是绕开风控）
 - **不要绕过限频**：换邮箱、换设备、改指纹重复申领一律不做，额度是服务端的成本闸门
 - **不要编造密钥**：没有 Key 就引导申领，绝不虚构一个 `bk_xxx` 去调用
 - **密钥是个人凭据**：只存 `.env` / `~/.bookvideo/env`，不写进代码、仓库、聊天记录或日志

@@ -9,7 +9,8 @@
 | 方法 | 路径 | 入参 | 返回 | 用途 |
 |---|---|---|---|---|
 | POST | `/api/login` | JSON `{"key": "..."}` | `{authenticated, name}` + `Set-Cookie: bk_sid` | 建立会话 |
-| POST | `/api/apply-key` | JSON `{"email": "...", "fp": "设备指纹"}` | `{ok, key, daily_limit, note}` | 公开自助申领免费密钥 |
+| POST | `/api/apply-code` | JSON `{"email": "..."}` | `{ok, ttl}`；未配 SMTP 时 `{ok:false, no_verify:true, error}` | 发送邮箱验证码 |
+| POST | `/api/apply-key` | JSON `{"email", "fp", "code"}` | `{ok, key, daily_limit, note}` | 公开自助申领免费密钥（配了 SMTP 必须带 `code`） |
 | POST | `/api/generate` | form `key` / `book` / `src_mode` / 可选 `duration` | `{ok, task_id, queue_position}` | 提交生成任务 |
 | GET | `/api/status?task_id=` | — | `{status, video, error, log}` | 查询任务状态 |
 | GET | `/api/books` | — | `{books:[{book_name, author, category}]}` | 书库（方向选书用） |
@@ -22,7 +23,9 @@
 - `status`：`queued` / `running` / `done` / `error`。失败态还包括 `failed`、`interrupted`、`aborted`、`terminated`。
 - `video`：`done` 后的成片地址，可能是对象存储签名 URL，有时效。
 - `quota_blocked`：`/api/generate` 额度不足时返回 `ok:false` + `quota_blocked:true`（兼容 HTTP 402）。
-- `/api/apply-key` 限频：按 邮箱 / 设备指纹 / IP 判重；超限返回 429 + `need_pay:true`。
+- `/api/apply-key` 限频：按 邮箱 / 设备指纹 / IP 段 判重；超限返回 429 + `need_pay:true`。
+- 邮箱验证：服务端配了 SMTP（`SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM`，465 端口加 `SMTP_SSL=1`）时，`/api/apply-key` 必须带正确 `code`，否则 400；验证码 10 分钟有效、一次一用、同邮箱 60 秒才能重发、每天最多 5 次。未配 SMTP 时自动降级为上面三重限频，避免线上申领挂掉。
+- **CLI 不代注册**：`bookvideo.py apply` 只打印申请页地址，不调用 `/api/apply-key`。申领必须由本人在页面完成，否则邮箱校验、设备指纹、IP 频次拿到的都不是申请者的真实信息。
 
 ## 额度模型（服务端口径）
 

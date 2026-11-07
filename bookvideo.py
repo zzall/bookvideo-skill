@@ -322,8 +322,9 @@ def _no_key_hint() -> None:
     lines = [
         "[需要配置密钥] 没找到 BOOKVIDEO_KEY —— 它决定你能生成多少条（免费档每天 3 条，失败不计数）。",
         "",
-        "  ① 免费自助申请（无需付费）：%s/skill" % base,
-        "     也可以一条命令直接领：python bookvideo.py apply --email 你的邮箱",
+        "  ① 免费申请（每日 3 条，失败不计数）：用浏览器打开 %s/skill" % base,
+        "     在网页上填邮箱、完成校验后领取，Key 会直接显示在页面上。",
+        "     领取后运行这条保存到本地：python bookvideo.py key --set 你的Key",
         "  ② 拿到后配好，三种方式任选其一：",
         "     · 写 .env（推荐）：项目根目录建 .env，内容一行  BOOKVIDEO_KEY=bk_xxxx",
         "     · 环境变量：export BOOKVIDEO_KEY=bk_xxxx",
@@ -523,8 +524,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="输出结构化 JSON（可放子命令后）")
     d.set_defaults(func=_run_download)
 
-    a = sub.add_parser("apply", help="自助申领免费密钥（首次使用先跑这个，无需找管理员）")
-    a.add_argument("--email", required=True, help="邮箱：服务端按邮箱 / 设备 / IP 判重限频")
+    a = sub.add_parser("apply", help="显示免费密钥申请页（在浏览器里领，CLI 不代注册）")
+    a.add_argument("--email", default="", help="可选：申请页需要预填的邮箱")
     a.add_argument("--base-url", default=argparse.SUPPRESS,
                    help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
     a.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
@@ -540,6 +541,10 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                    help="输出结构化 JSON（可放子命令后）")
     s.set_defaults(func=_run_status)
+
+    k = sub.add_parser("key", help="保存或查看本地密钥")
+    k.add_argument("--set", default="", help="把密钥保存到 ~/.bookvideo/env，后续命令自动读取")
+    k.set_defaults(func=_run_key)
 
     q = sub.add_parser("quota", help="查看当前密钥的今日额度 / 套餐 / 到期时间")
     q.add_argument("--key", default=argparse.SUPPRESS,
@@ -577,39 +582,55 @@ def _save_env_key(key: str) -> str:
     return str(f)
 
 
+def _apply_url(base: str, email: str = "") -> str:
+    """官方申请页地址。"""
+    b = (base or DEFAULT_BASE).rstrip("/")
+    url = b + "/skill"
+    email = (email or "").strip()
+    if email:
+        url += "?email=" + urllib.parse.quote(email)
+    return url
+
+
 def _run_apply(args) -> int:
-    """自助申领免费密钥：装上就能用，不必再找管理员要 Key。"""
-    email = (args.email or "").strip()
-    client = Client(getattr(args, "base_url", None)
-                    or os.environ.get("BOOKVIDEO_BASE_URL")
-                    or DEFAULT_BASE, "", timeout=args.http_timeout)
-    try:
-        j = client.apply_key(email, _device_fp())
-    except QuotaError as e:
-        print("[额度受限] %s\n  查看 / 订阅套餐：%s" % (e, client.base), file=sys.stderr)
-        return 5
-    except AuthError as e:
-        print("[错误] %s" % e, file=sys.stderr)
-        return 3
-    except BookVideoError as e:
-        print("[错误] %s" % e, file=sys.stderr)
-        return 4
-    key = str(j.get("key") or "")
-    saved = _save_env_key(key) if key else ""
-    if key:
-        os.environ["BOOKVIDEO_KEY"] = key
+    """给出官方申请页，让用户自己去领 Key。
+
+    CLI 不代注册：申领必须由本人在网页完成，邮箱校验、设备指纹、IP 频次才拿得到
+    真实信息；脚本代领等于绕开全部风控，等于给盗刷留了后门。
+    """
+    base = (getattr(args, "base_url", None)
+            or os.environ.get("BOOKVIDEO_BASE_URL")
+            or DEFAULT_BASE)
+    url = _apply_url(base, getattr(args, "email", "") or "")
     if getattr(args, "json", False):
-        print(json.dumps({"ok": True, "key": key,
-                          "daily_limit": j.get("daily_limit"),
-                          "saved_to": saved, "note": j.get("note")},
+        print(json.dumps({"ok": True, "apply_url": url,
+                          "hint": "在浏览器打开申请页领取 Key 后，运行 key --set 保存"},
                          ensure_ascii=False))
         return 0
-    print("密钥：%s" % key)
-    print("每日额度：%s 条（失败不计数）" % j.get("daily_limit"))
-    if saved:
-        print("已写入：%s（后续命令自动读取，不用再配环境变量）" % saved)
-    if j.get("note"):
-        print(j.get("note"))
+    print("请用浏览器打开下面这个页面申请免费密钥（每日 3 条，失败不计数）：")
+    print("  " + url)
+    print("")
+    print("申领要在网页上填邮箱并按提示完成校验；同一邮箱、同一设备、同一网络都有次数上限。")
+    print("拿到 Key 后保存到本地（后续命令自动读取）：")
+    print("  python bookvideo.py key --set 你的Key")
+    return 0
+
+
+def _run_key(args) -> int:
+    """保存 / 查看本地密钥。保存时写入 ~/.bookvideo/env，与启动时的读取顺序一致。"""
+    key = (getattr(args, "set", "") or "").strip()
+    if key:
+        saved = _save_env_key(key)
+        os.environ["BOOKVIDEO_KEY"] = key
+        print("已保存：%s" % saved)
+        print("后续命令会自动读取，不用再配环境变量。")
+        return 0
+    cur = os.environ.get("BOOKVIDEO_KEY") or ""
+    if not cur:
+        _no_key_hint()
+        return 2
+    print("当前密钥：%s" % (cur[:6] + "…" if len(cur) > 8 else cur))
+    print("（来自环境变量或 .env 文件；换一把就运行 key --set 新Key）")
     return 0
 
 
@@ -717,7 +738,7 @@ def _run_selftest() -> int:
     import threading
 
     class H(BaseHTTPRequestHandler):
-        calls = {"status": 0}
+        calls = {"status": 0, "apply": 0}
 
         def log_message(self, *a):  # 静默
             pass
@@ -744,6 +765,7 @@ def _run_selftest() -> int:
                 self._send(200, {"authenticated": True, "name": "tester"},
                            cookie="bk_sid=testtoken; Path=/")
             elif self.path == "/api/apply-key":
+                H.calls["apply"] += 1
                 self._send(200, {"ok": True, "key": "k_apply_test",
                                  "daily_limit": 3, "note": "mock"})
             elif self.path == "/api/generate":
@@ -803,8 +825,13 @@ def _run_selftest() -> int:
             check("download 未登录应报错", True)
         c.login()
         check("login 建立会话(cookie)", True)
-        ak = Client(base, "", timeout=5.0).apply_key("a@b.com", "fp-test")
-        check("apply-key 返回密钥", ak.get("key") == "k_apply_test")
+        # apply 只负责告诉用户去网页申领，不能在 CLI 里代注册（否则绕过邮箱/设备/网络风控）
+        args_a = argparse.Namespace(base_url=base, email="a@b.com", json=False,
+                                    http_timeout=5.0)
+        rc_a = _run_apply(args_a)
+        check("apply 返回 0 且只给申请页", rc_a == 0)
+        check("apply 打印 /skill 申请页地址", "/skill" in _apply_url(base, "a@b.com"))
+        check("apply 不调用 /api/apply-key", H.calls.get("apply", 0) == 0)
         g = c.generate("活着")
         check("generate 返回 task_id", g.get("task_id") == "t1")
         j = c.poll("t1", total_timeout=10, interval=0.1)
