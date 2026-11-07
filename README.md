@@ -48,9 +48,17 @@ curl -O https://raw.githubusercontent.com/zzall/bookvideo-skill/main/bookvideo.p
 
 ### 3.1 密钥 `BOOKVIDEO_KEY`
 
-向服务管理员索取（或到 <https://book.yufon.site/skill> 自助申请）。**密钥即额度账号，等同于可消耗生成次数**，务必保管。
+免费自助申领，两种方式等价（免费档每天 3 条，失败不计数）：
 
-三种配置方式任选（优先级从高到低）：
+```bash
+# ① 命令行直接领（推荐）：拿到后自动写进 ~/.bookvideo/env，后续命令自动读取
+python bookvideo.py apply --email 你的邮箱
+
+# ② 网页申请
+#    打开 https://book.yufon.site/skill ，填邮箱领取
+```
+
+**密钥即额度账号，等同于可消耗生成次数**，务必保管。已有密钥时，三种配置方式任选（优先级从高到低）：
 
 ```bash
 # ① 写进文件（推荐，配一次长期有效）
@@ -253,9 +261,9 @@ ffmpeg -i 活着.mp4 -i cover.jpg -map 0:v -map 0:a -map 1:v -disposition:v:1 at
 
 ```bash
 python bookvideo.py selftest
-# 期望：6 项 PASS，结尾 SELFTEST ALL_PASS
+# 期望：7 项 PASS，结尾 SELFTEST ALL_PASS
 ```
-内置一个 mock HTTP 服务，验证 登录 / 生成 / 轮询 / 方向选书 / 下载 全链路逻辑。
+内置一个 mock HTTP 服务，验证 未登录拦截 / 登录 / 申领密钥 / 生成 / 轮询 / 方向选书 / 下载 全链路逻辑。
 
 ---
 
@@ -268,6 +276,8 @@ python bookvideo.py generate --book A --book B         # 批量书单
 python bookvideo.py generate --book "书名" --no-poll   # 只入队拿 task_id
 python bookvideo.py generate --book "书名" --json      # 机器可读输出
 python bookvideo.py download --task-id <id> --out o.mp4 # 下载成片
+python bookvideo.py status --task-id <id>              # 查进度（配合 --no-poll）
 python bookvideo.py quota                              # 查今日额度/套餐/到期
+python bookvideo.py apply --email you@example.com      # 自助申领免费密钥
 python bookvideo.py selftest                            # 自测
 ```

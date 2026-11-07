@@ -203,6 +203,22 @@ class Client:
             raise ApiError("获取书库失败 HTTP %s：%s" % (st, j))
         return j.get("books") or []
 
+    def apply_key(self, email: str, fp: str = "") -> dict:
+        """自助申领免费密钥（POST /api/apply-key）。
+
+        服务端按 邮箱 / 设备 / IP 判重限频；超限返回 429 + need_pay，
+        正确解法是订阅套餐，不能换邮箱或换设备反复申领。
+        """
+        payload = {"email": email}
+        if fp:
+            payload["fp"] = fp
+        st, j = self._request("POST", "/api/apply-key", json_body=payload)
+        if st == 429 or j.get("need_pay"):
+            raise QuotaError(str(j.get("error") or "免费额度申请已达上限，请订阅套餐"))
+        if st >= 400 or not j.get("ok"):
+            raise ApiError("申领密钥失败：%s" % (j.get("error") or "HTTP %s" % st))
+        return j  # {ok, key, daily_limit, note}
+
     def me(self) -> dict:
         """当前账号信息：含今日额度 used/limit、套餐 plan、到期 paid_until、是否管理员。"""
         st, j = self._request("GET", "/api/me")
@@ -307,6 +323,7 @@ def _no_key_hint() -> None:
         "[需要配置密钥] 没找到 BOOKVIDEO_KEY —— 它决定你能生成多少条（免费档每天 3 条，失败不计数）。",
         "",
         "  ① 免费自助申请（无需付费）：%s/skill" % base,
+        "     也可以一条命令直接领：python bookvideo.py apply --email 你的邮箱",
         "  ② 拿到后配好，三种方式任选其一：",
         "     · 写 .env（推荐）：项目根目录建 .env，内容一行  BOOKVIDEO_KEY=bk_xxxx",
         "     · 环境变量：export BOOKVIDEO_KEY=bk_xxxx",
@@ -506,6 +523,24 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="输出结构化 JSON（可放子命令后）")
     d.set_defaults(func=_run_download)
 
+    a = sub.add_parser("apply", help="自助申领免费密钥（首次使用先跑这个，无需找管理员）")
+    a.add_argument("--email", required=True, help="邮箱：服务端按邮箱 / 设备 / IP 判重限频")
+    a.add_argument("--base-url", default=argparse.SUPPRESS,
+                   help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
+    a.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出结构化 JSON（可放子命令后）")
+    a.set_defaults(func=_run_apply)
+
+    s = sub.add_parser("status", help="查询任务进度（配合 generate --no-poll 使用）")
+    s.add_argument("--task-id", required=True)
+    s.add_argument("--key", default=argparse.SUPPRESS,
+                   help="访问密钥，或环境变量 BOOKVIDEO_KEY（可放子命令后）")
+    s.add_argument("--base-url", default=argparse.SUPPRESS,
+                   help="服务地址，默认 %s 或环境变量 BOOKVIDEO_BASE_URL" % DEFAULT_BASE)
+    s.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出结构化 JSON（可放子命令后）")
+    s.set_defaults(func=_run_status)
+
     q = sub.add_parser("quota", help="查看当前密钥的今日额度 / 套餐 / 到期时间")
     q.add_argument("--key", default=argparse.SUPPRESS,
                    help="访问密钥，或环境变量 BOOKVIDEO_KEY（可放子命令后）")
@@ -517,6 +552,97 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("selftest", help="内置 mock 服务端到端自测（无需真实服务）")
     return p
+
+
+def _device_fp() -> str:
+    """设备指纹：只用于服务端申领判重，不上传主机名等原始信息。"""
+    import hashlib
+    import platform
+    import uuid
+    raw = "%s|%s|%s" % (platform.node(), uuid.getnode(), platform.system())
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _save_env_key(key: str) -> str:
+    """把 Key 写进 ~/.bookvideo/env，与 _load_local_env 的查找顺序对齐。"""
+    d = Path.home() / ".bookvideo"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "env"
+    lines = []
+    if f.is_file():
+        lines = [ln for ln in f.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if not ln.strip().startswith("BOOKVIDEO_KEY=")]
+    lines.append("BOOKVIDEO_KEY=%s" % key.strip())
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(f)
+
+
+def _run_apply(args) -> int:
+    """自助申领免费密钥：装上就能用，不必再找管理员要 Key。"""
+    email = (args.email or "").strip()
+    client = Client(getattr(args, "base_url", None)
+                    or os.environ.get("BOOKVIDEO_BASE_URL")
+                    or DEFAULT_BASE, "", timeout=args.http_timeout)
+    try:
+        j = client.apply_key(email, _device_fp())
+    except QuotaError as e:
+        print("[额度受限] %s\n  查看 / 订阅套餐：%s" % (e, client.base), file=sys.stderr)
+        return 5
+    except AuthError as e:
+        print("[错误] %s" % e, file=sys.stderr)
+        return 3
+    except BookVideoError as e:
+        print("[错误] %s" % e, file=sys.stderr)
+        return 4
+    key = str(j.get("key") or "")
+    saved = _save_env_key(key) if key else ""
+    if key:
+        os.environ["BOOKVIDEO_KEY"] = key
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "key": key,
+                          "daily_limit": j.get("daily_limit"),
+                          "saved_to": saved, "note": j.get("note")},
+                         ensure_ascii=False))
+        return 0
+    print("密钥：%s" % key)
+    print("每日额度：%s 条（失败不计数）" % j.get("daily_limit"))
+    if saved:
+        print("已写入：%s（后续命令自动读取，不用再配环境变量）" % saved)
+    if j.get("note"):
+        print(j.get("note"))
+    return 0
+
+
+def _run_status(args) -> int:
+    """查询单个任务进度：配合 generate --no-poll 分段轮询，避免单条命令超时。"""
+    key = getattr(args, "key", None) or os.environ.get("BOOKVIDEO_KEY")
+    if not key:
+        _no_key_hint()
+        return 2
+    client = Client(getattr(args, "base_url", None)
+                    or os.environ.get("BOOKVIDEO_BASE_URL")
+                    or DEFAULT_BASE, key, timeout=args.http_timeout)
+    try:
+        client.login()
+        j = client.status(args.task_id)
+    except AuthError as e:
+        print("[错误] %s（可到 %s 登录查看 / 找回密钥）" % (e, client.base), file=sys.stderr)
+        return 3
+    except BookVideoError as e:
+        print("[错误] %s" % e, file=sys.stderr)
+        return 4
+    st = str(j.get("status") or "")
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": st != "error", "task_id": args.task_id,
+                          "status": st, "video": j.get("video") or "",
+                          "error": j.get("error") or ""}, ensure_ascii=False))
+        return 0
+    print("状态：%s" % st)
+    if j.get("video"):
+        print("成片：%s" % j.get("video"))
+    if j.get("error"):
+        print("错误：%s" % j.get("error"))
+    return 0
 
 
 def _run_quota(args) -> int:
@@ -617,6 +743,9 @@ def _run_selftest() -> int:
             if self.path == "/api/login":
                 self._send(200, {"authenticated": True, "name": "tester"},
                            cookie="bk_sid=testtoken; Path=/")
+            elif self.path == "/api/apply-key":
+                self._send(200, {"ok": True, "key": "k_apply_test",
+                                 "daily_limit": 3, "note": "mock"})
             elif self.path == "/api/generate":
                 self._send(200, {"ok": True, "task_id": "t1",
                                  "queue_position": 0})
@@ -674,6 +803,8 @@ def _run_selftest() -> int:
             check("download 未登录应报错", True)
         c.login()
         check("login 建立会话(cookie)", True)
+        ak = Client(base, "", timeout=5.0).apply_key("a@b.com", "fp-test")
+        check("apply-key 返回密钥", ak.get("key") == "k_apply_test")
         g = c.generate("活着")
         check("generate 返回 task_id", g.get("task_id") == "t1")
         j = c.poll("t1", total_timeout=10, interval=0.1)

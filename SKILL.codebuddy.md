@@ -10,8 +10,8 @@ description: 用书名/方向/书单一键生成「书单视频」。当用户�
 
 ## 前置条件
 - 本机可访问脚本：`bookvideo.py`（路径按实际替换）。
-- **若用户还没有 Key**：先让他到 `https://book.yufon.site/skill` 免费申请（免费档每天 3 条，失败不计数），拿到后再按下文配置；**不要替他编造 Key，也不要跳过这一步直接报「生成失败」**。
-- 已配置密钥 `BOOKVIDEO_KEY`（向管理员申请，等同于一个带额度的账号）。以下任一方式即可，脚本会自动读取：
+- **若用户还没有 Key**：优先用一条命令直接领——`python bookvideo.py apply --email 用户的邮箱`（自动写进 `~/.bookvideo/env`，免费档每天 3 条，失败不计数）；也可让他到 `https://book.yufon.site/skill` 网页申请。**不要替他编造 Key，也不要跳过这一步直接报「生成失败」**。
+- 已配置密钥 `BOOKVIDEO_KEY`（等同于一个带额度的账号）。以下任一方式即可，脚本会自动读取：
   1. **`.env` 文件**（推荐）：写成一行 `BOOKVIDEO_KEY=bk_xxx`，放在项目根目录 / `bookvideo.py` 同目录 / `~/.bookvideo/env` 任一处；
   2. **环境变量**：`BOOKVIDEO_KEY=bk_xxx`；
   3. **命令行**：`--key bk_xxx`。
